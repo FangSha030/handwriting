@@ -1,0 +1,175 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: 'Noto Sans SC', system-ui, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  background-color: #f0ede5;
+  color: #2c2825;
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d8d3c8;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #c5bda8;
+}
+
+/* 滑块样式 */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: #e8e4da;
+  border-radius: 2px;
+  outline: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  background: #7c9885;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid #faf8f3;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+  transition: transform 0.1s;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  background: #7c9885;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid #faf8f3;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+}
+
+/* 数值输入框 */
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* 文本域 */
+textarea {
+  resize: none;
+}
+
+/* 按钮基础样式 */
+.btn-base {
+  @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-150 cursor-pointer select-none;
+}
+
+.btn-primary {
+  @apply btn-base bg-accent text-white hover:bg-accent-dark active:scale-95;
+}
+
+.btn-secondary {
+  @apply btn-base bg-paper-dark text-ink hover:bg-line-soft active:scale-95 border border-line;
+}
+
+.btn-ghost {
+  @apply btn-base text-ink-light hover:bg-paper-dark hover:text-ink;
+}
+
+.btn-icon {
+  @apply inline-flex items-center justify-center w-8 h-8 rounded-md text-ink-light hover:bg-paper-dark hover:text-ink transition-all duration-150 cursor-pointer;
+}
+
+.btn-icon-active {
+  @apply bg-accent text-white hover:bg-accent-dark;
+}
+
+/* 面板样式 */
+.panel {
+  @apply bg-paper rounded-lg border border-line-soft shadow-soft;
+}
+
+.panel-header {
+  @apply px-4 py-3 border-b border-line-soft flex items-center justify-between;
+}
+
+.panel-title {
+  @apply text-sm font-semibold text-ink flex items-center gap-2;
+}
+
+.panel-body {
+  @apply p-4 space-y-3;
+}
+
+/* 标签样式 */
+.label {
+  @apply text-xs font-medium text-ink-light mb-1.5 block;
+}
+
+/* 输入框样式 */
+.input-base {
+  @apply w-full px-3 py-1.5 text-sm bg-white border border-line rounded-md focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-colors;
+}
+
+/* 分隔线 */
+.divider {
+  @apply h-px bg-line-soft my-3;
+}
+
+/* 工具提示 */
+.tooltip {
+  @apply absolute z-50 px-2 py-1 text-xs bg-ink text-paper rounded shadow-medium pointer-events-none whitespace-nowrap;
+}
+
+/* 模式切换徽章 */
+.mode-badge {
+  @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium;
+}
+
+.mode-edit {
+  @apply bg-warn/15 text-warn border border-warn/30;
+}
+
+.mode-preview {
+  @apply bg-accent/15 text-accent-dark border border-accent/30;
+}
