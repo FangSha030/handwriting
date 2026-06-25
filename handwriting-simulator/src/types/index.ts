@@ -3,114 +3,222 @@
 /** 编辑模式 */
 export type EditorMode = 'edit' | 'preview'
 
-/** 手写字体类型 */
+/** 手写字体类型（含本地+Google Fonts CDN） */
 export type HandwritingFont =
+  // 本地字体
+  | 'LXGW WenKai'
+  // Google Fonts 中文手写
   | 'Ma Shan Zheng'
   | 'Liu Jian Mao Cao'
   | 'Zhi Mang Xing'
+  | 'Long Cang'
+  | 'ZCOOL KuaiLe'
+  | 'ZCOOL QingKe HuangYou'
+  | 'ZCOOL XiaoWei'
+  | 'Tian Ma Shan Shan'
+  // Google Fonts 英文手写
   | 'Caveat'
   | 'Kalam'
   | 'Patrick Hand'
+  | 'Shadows Into Light'
+  | 'Indie Flower'
+  // 用户自定义
+  | string
 
 /** 打印字体类型（编辑态使用） */
 export type PrintFont = 'Noto Sans SC' | 'Noto Serif SC'
 
+/** 字体来源 */
+export type FontSource = 'local' | 'google' | 'custom'
+
+/** 字体定义 */
+export interface FontDefinition {
+  name: HandwritingFont
+  label: string
+  source: FontSource
+  /** 本地字体文件路径（仅 source=local/custom 时） */
+  file?: string
+  /** 预览样例 */
+  sample: string
+  /** 是否支持中文 */
+  cjk: boolean
+}
+
+/** 纸张模板类型 */
+export type PaperTemplateType =
+  | 'blank'        // 空白
+  | 'lined'        // 横线
+  | 'grid'         // 方格
+  | 'dot'          // 点阵
+  | 'tianzi'       // 田字格
+  | 'pinyin'       // 拼音格
+  | 'custom'       // 自定义背景图
+
+/** 纸张尺寸预设 */
+export type PageSizePreset = 'A4' | 'A5' | 'B5' | 'Letter' | 'Custom'
+
+/** 背景图来源 */
+export type BackgroundSource = 'template' | 'upload' | 'folder'
+
+/** 背景图定义 */
+export interface BackgroundImage {
+  id: string
+  /** 来源类型 */
+  source: BackgroundSource
+  /** 原始文件名 */
+  name: string
+  /** Data URL */
+  dataUrl: string
+  /** 宽度 */
+  width: number
+  /** 高度 */
+  height: number
+  /** 缩略图 Data URL */
+  thumbnail?: string
+}
+
+/** 可写区域（背景图上检测到的可书写区域） */
+export interface WritableRegion {
+  id: string
+  /** 区域 x 坐标 */
+  x: number
+  /** 区域 y 坐标 */
+  y: number
+  /** 区域宽度 */
+  width: number
+  /** 区域高度 */
+  height: number
+  /** 该区域内的横格线 y 坐标列表（相对于区域） */
+  gridLines: number[]
+  /** 是否为自动检测 */
+  autoDetected: boolean
+}
+
+/** 单页配置 */
+export interface PageConfig {
+  id: string
+  /** 页面索引 */
+  index: number
+  /** 使用的背景图 ID（null 表示使用纸张模板） */
+  backgroundId: string | null
+  /** 纸张模板类型 */
+  paperTemplate: PaperTemplateType
+  /** 页面尺寸 */
+  width: number
+  height: number
+  /** 该页的可写区域列表 */
+  regions: WritableRegion[]
+  /** 该页分配到的文本（字符索引范围） */
+  textStartIndex: number
+  textEndIndex: number
+}
+
 /** 单个字符的布局信息 */
 export interface CharLayout {
-  /** 字符内容 */
   char: string
-  /** 字符在画布中的 x 坐标（基线左端） */
   x: number
-  /** 字符在画布中的 y 坐标（基线） */
   y: number
-  /** 字符宽度 */
   width: number
-  /** 字符高度 */
   height: number
-  /** 字符所在行索引 */
   lineIndex: number
-  /** 是否为换行符 */
+  pageIndex: number
+  regionId: string
   isLineBreak?: boolean
+  isPageBreak?: boolean
 }
 
-/** 单个字符的手写样式（最终渲染时使用） */
+/** 单个字符的手写样式 */
 export interface CharHandwritingStyle {
-  /** x 方向随机偏移 */
   offsetX: number
-  /** y 方向随机偏移 */
   offsetY: number
-  /** 旋转角度（弧度） */
   rotation: number
-  /** 缩放比例 */
   scale: number
-  /** 不透明度（模拟笔触深浅） */
   opacity: number
-  /** 颜色微调 */
   color: string
+  strokeWidth: number
 }
 
-/** 用户对选中区域的微调操作 */
+/** 单页布局结果 */
+export interface PageLayout {
+  /** 页面索引 */
+  pageIndex: number
+  /** 该页使用的背景图 ID（null 表示纸张模板） */
+  backgroundId: string | null
+  /** 该页的可写区域 */
+  region: WritableRegion
+  /** 该页的字符布局列表 */
+  chars: CharLayout[]
+  /** 该页在全文中的起始字符索引 */
+  startCharIndex: number
+  /** 该页在全文中的结束字符索引 */
+  endCharIndex: number
+}
+
+/** 用户微调操作 */
 export interface Adjustment {
-  /** 唯一 ID */
   id: string
-  /** 选中字符的索引列表 */
   charIndices: number[]
-  /** 位置 x 偏移（px） */
   offsetX: number
-  /** 位置 y 偏移（px） */
   offsetY: number
-  /** 字号缩放比例（1 = 原始） */
   scale: number
-  /** 旋转角度（度） */
   rotation: number
-  /** 颜色覆盖（可选） */
   color?: string
-  /** 创建时间戳 */
   createdAt: number
 }
 
-/** 横格线 */
-export interface GridLine {
-  /** y 坐标 */
-  y: number
-  /** 是否为自动检测 */
-  auto: boolean
-}
-
-/** 手写参数配置 */
+/** 手写参数配置（扩展版，对齐 HandwritingGenerator） */
 export interface HandwritingParams {
-  /** 手写字体 */
+  // === 字体 ===
   font: HandwritingFont
-  /** 打印字体（编辑态） */
   printFont: PrintFont
-  /** 字号 */
+
+  // === 排版 ===
   fontSize: number
-  /** 行高（倍数） */
   lineHeight: number
-  /** 字间距 */
   letterSpacing: number
-  /** 颜色 */
+  wordSpacing: number
+  /** 首行缩进（字符数） */
+  firstLineIndent: number
+
+  // === 页面 ===
+  pageSize: PageSizePreset
+  pageWidth: number
+  pageHeight: number
+  marginTop: number
+  marginBottom: number
+  marginLeft: number
+  marginRight: number
+
+  // === 颜色 ===
   color: string
-  /** 位置抖动幅度 */
-  positionJitter: number
-  /** 旋转抖动幅度（度） */
-  rotationJitter: number
-  /** 大小抖动幅度（比例） */
-  scaleJitter: number
-  /** 笔触深浅变化 */
-  opacityJitter: number
-  /** 颜色抖动幅度 */
-  colorJitter: number
-  /** 墨水浓度（基础不透明度） */
-  inkIntensity: number
-  /** 是否启用横格线 */
-  showGrid: boolean
-  /** 横格线间距 */
-  gridSpacing: number
-  /** 横格线颜色 */
-  gridColor: string
-  /** 纸张背景色 */
   paperColor: string
+
+  // === 手写自然度 ===
+  positionJitter: number
+  rotationJitter: number
+  scaleJitter: number
+  opacityJitter: number
+  colorJitter: number
+  inkIntensity: number
+  /** 笔迹粗细（0.5-3） */
+  strokeWidth: number
+  /** 笔迹粗细抖动 */
+  strokeWidthJitter: number
+
+  // === 横格 ===
+  showGrid: boolean
+  gridSpacing: number
+  gridColor: string
+  /** 是否自动检测背景横格线 */
+  autoDetectGrid: boolean
+  /** 基线对齐容差 */
+  baselineTolerance: number
+
+  // === 文本流 ===
+  /** 是否自动分页 */
+  autoPageBreak: boolean
+  /** 是否自动检测可写区域 */
+  autoDetectRegions: boolean
 }
 
 /** 画布尺寸 */

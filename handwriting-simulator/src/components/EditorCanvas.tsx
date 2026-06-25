@@ -23,189 +23,148 @@ export function EditorCanvas() {
     setIsDragging,
     params,
     addToast,
+    pages,
+    currentPageIndex,
+    setCurrentPageIndex,
   } = useEditorStore()
 
-  // 根据容器大小调整画布
+  // 根据页面尺寸预设调整画布
   useEffect(() => {
-    const container = containerRef.current
-    if (!container) return
-
-    const updateSize = () => {
-      const rect = container.getBoundingClientRect()
-      const padding = 48
-      const width = Math.max(400, rect.width - padding)
-      const height = Math.max(400, rect.height - padding)
-      setCanvasSize({ width: Math.floor(width), height: Math.floor(height) })
-    }
-
-    updateSize()
-    const observer = new ResizeObserver(updateSize)
-    observer.observe(container)
-    return () => observer.disconnect()
-  }, [setCanvasSize])
+    const { pageWidth, pageHeight } = params
+    setCanvasSize({ width: pageWidth, height: pageHeight })
+  }, [params.pageSize, params.pageWidth, params.pageHeight, setCanvasSize])
 
   // 设置 canvas 实际像素尺寸（考虑 DPR）
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
+
     const dpr = window.devicePixelRatio || 1
     canvas.width = canvasSize.width * dpr
     canvas.height = canvasSize.height * dpr
     canvas.style.width = `${canvasSize.width}px`
     canvas.style.height = `${canvasSize.height}px`
+
     const ctx = canvas.getContext('2d')
     if (ctx) {
       ctx.scale(dpr, dpr)
+      render()
     }
-    render()
   }, [canvasSize, render])
-
-  // 获取鼠标在画布坐标系中的位置
-  const getCanvasPos = useCallback((e: React.MouseEvent): { x: number; y: number } => {
-    const canvas = canvasRef.current
-    if (!canvas) return { x: 0, y: 0 }
-    const rect = canvas.getBoundingClientRect()
-    return {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-    }
-  }, [])
 
   // 鼠标按下：开始框选
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (mode !== 'edit') return
-    if (e.button !== 0) return
+    const canvas = canvasRef.current
+    if (!canvas) return
 
-    const pos = getCanvasPos(e)
+    const rect = canvas.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const y = e.clientY - rect.top
+
     setIsSelecting(true)
+    setDragStart({ x, y })
+    setSelectionRect({ x, y, width: 0, height: 0 })
     setIsDragging(true)
-    setDragStart(pos)
-    setSelectionRect({ x: pos.x, y: pos.y, width: 0, height: 0 })
-  }, [mode, getCanvasPos, setIsDragging, setSelectionRect])
+  }, [mode, setSelectionRect, setIsDragging])
 
-  // 鼠标移动：更新框选矩形
+  // 鼠标移动：更新框选
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!isSelecting || !dragStart) return
+    const canvas = canvasRef.current
+    if (!canvas) return
 
-    const pos = getCanvasPos(e)
-    const rect = {
-      x: Math.min(dragStart.x, pos.x),
-      y: Math.min(dragStart.y, pos.y),
-      width: Math.abs(pos.x - dragStart.x),
-      height: Math.abs(pos.y - dragStart.y),
+    const rect = canvas.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const y = e.clientY - rect.top
+
+    const newRect = {
+      x: Math.min(dragStart.x, x),
+      y: Math.min(dragStart.y, y),
+      width: Math.abs(x - dragStart.x),
+      height: Math.abs(y - dragStart.y),
     }
-    setSelectionRect(rect)
-  }, [isSelecting, dragStart, getCanvasPos, setSelectionRect])
+    setSelectionRect(newRect)
+  }, [isSelecting, dragStart, setSelectionRect])
 
-  // 鼠标抬起：完成框选，计算选中字符
+  // 鼠标抬起：完成框选
   const handleMouseUp = useCallback(() => {
-    if (!isSelecting) return
-    setIsSelecting(false)
-    setIsDragging(false)
+    if (!isSelecting || !selectionRect) {
+      setIsSelecting(false)
+      setIsDragging(false)
+      return
+    }
 
-    if (selectionRect && (selectionRect.width > 3 || selectionRect.height > 3)) {
+    // 只有框选区域足够大才判定
+    if (selectionRect.width > 5 && selectionRect.height > 5) {
       const indices = getSelectedIndicesFromRect(selectionRect)
       if (indices.length > 0) {
         setSelectedIndices(new Set(indices))
-        addToast('success', `已框选 ${indices.length} 个字符，可进行微调`)
+        addToast('info', `已选中 ${indices.length} 个字符`)
       } else {
-        addToast('info', '框选区域内未检测到文字')
+        addToast('warn', '未选中任何字符，请尝试框选文字区域')
       }
     }
 
+    setIsSelecting(false)
     setDragStart(null)
+    setIsDragging(false)
   }, [isSelecting, selectionRect, getSelectedIndicesFromRect, setSelectedIndices, addToast, setIsDragging])
 
-  // 点击空白处取消选中
-  const handleCanvasClick = useCallback((e: React.MouseEvent) => {
-    if (mode !== 'edit') return
-    // 如果是拖拽结束的小范围移动，视为点击空白
-    if (selectionRect && selectionRect.width < 3 && selectionRect.height < 3) {
-      clearSelection()
-    }
-  }, [mode, selectionRect, clearSelection])
-
-  // 键盘快捷键
+  // 键盘事件：Esc 取消选中
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (mode !== 'edit') return
-      // Esc 取消选中
       if (e.key === 'Escape') {
         clearSelection()
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [mode, clearSelection])
+  }, [clearSelection])
 
-  // 绘制框选矩形覆盖层
-  const renderSelectionOverlay = () => {
-    if (!selectionRect || !isSelecting) return null
-    return (
-      <div
-        className="absolute border-2 border-accent bg-accent/10 pointer-events-none rounded-sm"
-        style={{
-          left: selectionRect.x,
-          top: selectionRect.y,
-          width: selectionRect.width,
-          height: selectionRect.height,
-        }}
-      />
-    )
-  }
+  // 缩放显示（适应容器）
+  const [displayScale, setDisplayScale] = useState(1)
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
 
-  // 绘制选中字符的高亮覆盖层
-  const renderSelectedHighlight = () => {
-    if (mode !== 'edit' || selectedIndices.size === 0) return null
-    const { layouts } = useEditorStore.getState()
-    const highlights: React.ReactNode[] = []
+    const updateScale = () => {
+      const containerRect = container.getBoundingClientRect()
+      const padding = 48
+      const scaleX = (containerRect.width - padding) / canvasSize.width
+      const scaleY = (containerRect.height - padding) / canvasSize.height
+      setDisplayScale(Math.min(scaleX, scaleY, 1))
+    }
 
-    selectedIndices.forEach((idx) => {
-      const layout = layouts[idx]
-      if (!layout || layout.isLineBreak) return
-      const bbox = getCharBoundingBox(layout, 4)
-      highlights.push(
-        <div
-          key={idx}
-          className="absolute border border-accent/60 bg-accent/8 pointer-events-none rounded-sm"
-          style={{
-            left: bbox.x,
-            top: bbox.y,
-            width: bbox.width,
-            height: bbox.height,
-          }}
-        />,
-      )
-    })
-
-    return <>{highlights}</>
-  }
+    updateScale()
+    const observer = new ResizeObserver(updateScale)
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [canvasSize])
 
   return (
-    <div
-      ref={containerRef}
-      className="flex-1 flex items-center justify-center bg-paper-dark/50 overflow-hidden relative"
-    >
-      {/* 画布容器 */}
-      <div className="relative shadow-medium rounded-sm overflow-hidden">
+    <div ref={containerRef} className="flex-1 overflow-auto bg-paper-dark flex items-center justify-center p-6 relative">
+      {/* 画布容器（用于缩放） */}
+      <div
+        style={{
+          transform: `scale(${displayScale})`,
+          transformOrigin: 'center center',
+          position: 'relative',
+        }}
+      >
         <canvas
           ref={canvasRef}
-          className={`block bg-white cursor-${mode === 'edit' ? (isSelecting ? 'crosshair' : 'text') : 'default'}`}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
-          onClick={handleCanvasClick}
+          className="bg-white shadow-medium rounded-sm cursor-crosshair"
+          style={{ display: 'block' }}
         />
-        {/* 覆盖层 */}
-        <div className="absolute inset-0 pointer-events-none">
-          {renderSelectionOverlay()}
-          {renderSelectedHighlight()}
-        </div>
       </div>
 
       {/* 模式标识 */}
-      <div className="absolute top-4 left-4 flex items-center gap-2">
+      <div className="absolute top-4 left-4 flex items-center gap-2 z-10">
         {mode === 'edit' ? (
           <span className="mode-badge mode-edit">
             <svg className="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
@@ -224,14 +183,41 @@ export function EditorCanvas() {
         )}
       </div>
 
+      {/* 多页导航 */}
+      {pages.length > 1 && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-paper/90 px-3 py-1.5 rounded-full shadow-soft backdrop-blur-sm z-10">
+          <button
+            className="btn-icon w-6 h-6 disabled:opacity-30"
+            onClick={() => setCurrentPageIndex(Math.max(0, currentPageIndex - 1))}
+            disabled={currentPageIndex === 0}
+          >
+            <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
+            </svg>
+          </button>
+          <span className="text-xs text-ink-light min-w-[60px] text-center">
+            第 {currentPageIndex + 1} / {pages.length} 页
+          </span>
+          <button
+            className="btn-icon w-6 h-6 disabled:opacity-30"
+            onClick={() => setCurrentPageIndex(Math.min(pages.length - 1, currentPageIndex + 1))}
+            disabled={currentPageIndex === pages.length - 1}
+          >
+            <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+            </svg>
+          </button>
+        </div>
+      )}
+
       {/* 画布信息 */}
-      <div className="absolute bottom-4 right-4 text-xs text-ink-soft bg-paper/80 px-2 py-1 rounded backdrop-blur-sm">
-        {canvasSize.width} × {canvasSize.height}
+      <div className="absolute bottom-4 right-4 text-xs text-ink-soft bg-paper/80 px-2 py-1 rounded backdrop-blur-sm z-10">
+        {canvasSize.width} × {canvasSize.height} · {Math.round(displayScale * 100)}%
       </div>
 
       {/* 操作提示 */}
       {mode === 'edit' && selectedIndices.size === 0 && !isSelecting && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-xs text-ink-soft bg-paper/90 px-3 py-1.5 rounded-full shadow-soft backdrop-blur-sm animate-fade-in">
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-xs text-ink-soft bg-paper/90 px-3 py-1.5 rounded-full shadow-soft backdrop-blur-sm animate-fade-in z-10">
           鼠标拖拽框选文字进行微调 · 按 Esc 取消选中
         </div>
       )}

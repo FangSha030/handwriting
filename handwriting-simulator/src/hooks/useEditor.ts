@@ -1,94 +1,107 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { useEditorStore } from '../store/editorStore'
 import {
-  layoutText,
   generateHandwritingStyles,
   renderEditMode,
   renderPreviewMode,
   getCharBoundingBox,
 } from '../utils/handwriting'
 import { detectGridFromLayout, alignToGrid } from '../utils/gridDetection'
+import { flowTextIntoRegions, flattenPages } from '../utils/textFlow'
+import { drawPaperTemplate, getTemplateWritableRegion, PAGE_SIZE_PRESETS } from '../utils/paperTemplates'
+import { detectWritableRegions, detectGridLinesFromImage, imageToImageData, loadImage } from '../utils/regionDetection'
 
 /**
  * 编辑器核心 Hook
- * 管理 canvas 渲染、文本布局、横格线检测
+ * 管理 canvas 渲染、文本布局、横格线检测、背景图、文本流
  */
 export function useEditor(canvasRef: React.RefObject<HTMLCanvasElement>) {
-  const {
-    text,
-    params,
-    mode,
-    canvasSize,
-    randomSeed,
-    gridLines,
-    showBoundingBoxes,
-    showGrid,
-    showAlignmentGuides,
-    setLayouts,
-    setHandwritingStyles,
-    setGridLines,
-    setGridAutoDetected,
-    getMergedAdjustments,
-  } = useEditorStore()
+  const store = useEditorStore()
 
   const offscreenRef = useRef<HTMLCanvasElement | null>(null)
 
-  // 重新计算布局
-  const recomputeLayout = useCallback(() => {
+  // 重新计算布局（核心：文本流 + 区域检测）
+  const recomputeLayout = useCallback(async () => {
     const canvas = canvasRef.current
     if (!canvas) return
 
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    // 根据横格线对齐
-    const startY = gridLines.length > 0 ? gridLines[0] - params.fontSize : 60
-    let layouts = layoutText(text, ctx, params, canvasSize.width, startY, gridLines)
+    const { text, params, canvasSize, writableRegions, currentBackgroundImg, paperTemplate, randomSeed } = store
 
-    // 自动基线对齐到横格线
-    if (gridLines.length > 0 && showAlignmentGuides) {
-      layouts = alignToGrid(layouts, gridLines, 25)
+    // 确定可写区域
+    let regions = writableRegions
+
+    // 如果没有显式设置区域，根据背景/模板生成
+    if (regions.length === 0) {
+      if (currentBackgroundImg && params.autoDetectRegions) {
+        // 自动检测背景可写区域
+        try {
+          const imageData = imageToImageData(currentBackgroundImg, canvasSize.width, canvasSize.height)
+          // 先检测横格线
+          const gridYs = params.autoDetectGrid ? detectGridLinesFromImage(imageData, 100, 180) : []
+          // 基于横格线检测可写区域
+          regions = detectWritableRegions(imageData, gridYs, {
+            top: params.marginTop,
+            bottom: params.marginBottom,
+            left: params.marginLeft,
+            right: params.marginRight,
+          })
+        } catch (e) {
+          console.warn('Region detection failed:', e)
+        }
+      }
+
+      // 如果还是没区域，使用纸张模板生成
+      if (regions.length === 0) {
+        const templateRegion = getTemplateWritableRegion(
+          canvasSize.width,
+          canvasSize.height,
+          { top: params.marginTop, bottom: params.marginBottom, left: params.marginLeft, right: params.marginRight },
+          params.gridSpacing,
+          paperTemplate,
+        )
+        regions = [{
+          id: 'template-region',
+          x: templateRegion.x,
+          y: templateRegion.y,
+          width: templateRegion.width,
+          height: templateRegion.height,
+          gridLines: templateRegion.gridLines,
+          autoDetected: false,
+        }]
+      }
     }
 
-    setLayouts(layouts)
+    // 文本流布局
+    const pages = flowTextIntoRegions(text, ctx, params, regions)
+    const layouts = flattenPages(pages)
+
+    store.setPages(pages)
+    store.setLayouts(layouts)
+    store.setWritableRegions(regions)
 
     // 生成手写样式
     const styles = generateHandwritingStyles(layouts, params, randomSeed)
-    setHandwritingStyles(styles)
-  }, [text, params, canvasSize, gridLines, randomSeed, showAlignmentGuides, canvasRef, setLayouts, setHandwritingStyles])
+    store.setHandwritingStyles(styles)
 
-  // 自动检测横格线（基于文本布局）
+    // 更新横格线（用于显示）
+    const allGridLines = new Set<number>()
+    regions.forEach((r) => {
+      r.gridLines.forEach((y) => allGridLines.add(r.y + y))
+    })
+    store.setGridLines(Array.from(allGridLines).sort((a, b) => a - b))
+    store.setGridAutoDetected(true)
+  }, [canvasRef, store])
+
+  // 自动检测横格线
   const autoDetectGrid = useCallback(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-
-    // 先做一次布局（不依赖横格线）
-    const startY = 60
-    const baseLayouts = layoutText(text, ctx, params, canvasSize.width, startY, [])
-    const detected = detectGridFromLayout(baseLayouts)
-
-    if (detected.length > 0) {
-      setGridLines(detected)
-      setGridAutoDetected(true)
-    }
-  }, [text, params, canvasSize, canvasRef, setGridLines, setGridAutoDetected])
-
-  // 初次加载时自动检测横格线
-  useEffect(() => {
-    if (gridLines.length === 0 && text) {
-      autoDetectGrid()
-    }
-  }, []) // 仅初次加载
-
-  // 文本/参数变化时重新布局
-  useEffect(() => {
     recomputeLayout()
-  }, [recomputeLayout])
+    store.addToast('success', `已检测到 ${store.gridLines.length} 条横格线`)
+  }, [recomputeLayout, store])
 
-  // 渲染画布
+  // 渲染
   const render = useCallback(() => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -96,9 +109,39 @@ export function useEditor(canvasRef: React.RefObject<HTMLCanvasElement>) {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    const { layouts, handwritingStyles } = useEditorStore.getState()
+    const {
+      mode,
+      params,
+      showBoundingBoxes,
+      showGrid,
+      showRegions,
+      getMergedAdjustments,
+      layouts,
+      handwritingStyles,
+      selectedIndices,
+      selectionRect,
+      currentBackgroundImg,
+      writableRegions,
+      paperTemplate,
+    } = store
+
     const mergedAdjustments = getMergedAdjustments()
-    const selectedIndices = useEditorStore.getState().selectedIndices
+
+    // 如果没有背景图，绘制纸张模板
+    if (!currentBackgroundImg) {
+      drawPaperTemplate(
+        ctx,
+        canvas.width,
+        canvas.height,
+        paperTemplate,
+        {
+          paperColor: params.paperColor,
+          lineColor: params.gridColor,
+          lineSpacing: params.gridSpacing,
+          margin: { top: params.marginTop, bottom: params.marginBottom, left: params.marginLeft, right: params.marginRight },
+        },
+      )
+    }
 
     if (mode === 'edit') {
       renderEditMode(
@@ -109,7 +152,22 @@ export function useEditor(canvasRef: React.RefObject<HTMLCanvasElement>) {
         selectedIndices,
         showBoundingBoxes,
         showGrid,
+        currentBackgroundImg,
+        showRegions ? writableRegions : [],
       )
+
+      // 绘制选区矩形
+      if (selectionRect) {
+        ctx.save()
+        ctx.strokeStyle = 'rgba(124, 152, 133, 0.8)'
+        ctx.fillStyle = 'rgba(124, 152, 133, 0.1)'
+        ctx.lineWidth = 1.5
+        ctx.setLineDash([4, 4])
+        ctx.fillRect(selectionRect.x, selectionRect.y, selectionRect.width, selectionRect.height)
+        ctx.strokeRect(selectionRect.x, selectionRect.y, selectionRect.width, selectionRect.height)
+        ctx.setLineDash([])
+        ctx.restore()
+      }
     } else {
       renderPreviewMode(
         ctx,
@@ -117,14 +175,11 @@ export function useEditor(canvasRef: React.RefObject<HTMLCanvasElement>) {
         handwritingStyles,
         params,
         mergedAdjustments,
+        currentBackgroundImg,
+        writableRegions,
       )
     }
-  }, [canvasRef, mode, params, showBoundingBoxes, showGrid, getMergedAdjustments])
-
-  // 任何相关状态变化时重新渲染
-  useEffect(() => {
-    render()
-  }, [render, useEditorStore.getState().layouts, useEditorStore.getState().handwritingStyles, useEditorStore.getState().selectedIndices, useEditorStore.getState().adjustments, useEditorStore.getState().pendingAdjustment, useEditorStore.getState().selectionRect])
+  }, [canvasRef, store])
 
   // 订阅 store 变化以触发重渲染
   useEffect(() => {
@@ -133,6 +188,31 @@ export function useEditor(canvasRef: React.RefObject<HTMLCanvasElement>) {
     })
     return unsubscribe
   }, [render])
+
+  // 文本/参数/背景变化时重新布局
+  useEffect(() => {
+    recomputeLayout()
+  }, [
+    store.text,
+    store.params.fontSize,
+    store.params.lineHeight,
+    store.params.letterSpacing,
+    store.params.wordSpacing,
+    store.params.firstLineIndent,
+    store.params.font,
+    store.params.marginTop,
+    store.params.marginBottom,
+    store.params.marginLeft,
+    store.params.marginRight,
+    store.params.gridSpacing,
+    store.params.autoDetectGrid,
+    store.params.autoDetectRegions,
+    store.params.autoPageBreak,
+    store.canvasSize,
+    store.currentBackgroundId,
+    store.paperTemplate,
+    store.randomSeed,
+  ])
 
   // 根据框选矩形获取选中的字符索引
   const getSelectedIndicesFromRect = useCallback(
@@ -143,9 +223,7 @@ export function useEditor(canvasRef: React.RefObject<HTMLCanvasElement>) {
       layouts.forEach((layout, index) => {
         if (layout.isLineBreak) return
 
-        // 使用包含留白的边界框进行判定
         const bbox = getCharBoundingBox(layout, 4)
-        // 矩形相交判定
         if (
           rect.x < bbox.x + bbox.width &&
           rect.x + rect.width > bbox.x &&
@@ -161,10 +239,22 @@ export function useEditor(canvasRef: React.RefObject<HTMLCanvasElement>) {
     [],
   )
 
+  // 加载背景图
+  const loadBackground = useCallback(async (dataUrl: string) => {
+    try {
+      const img = await loadImage(dataUrl)
+      store.setCurrentBackgroundImg(img)
+      store.addToast('success', '背景图已加载')
+    } catch (e) {
+      store.addToast('error', '背景图加载失败')
+    }
+  }, [store])
+
   return {
     recomputeLayout,
     autoDetectGrid,
     render,
     getSelectedIndicesFromRect,
+    loadBackground,
   }
 }

@@ -3,19 +3,21 @@ import type {
   CharHandwritingStyle,
   HandwritingParams,
   SelectionRect,
+  WritableRegion,
+  PageLayout,
 } from '../types'
 
 /**
- * 手写渲染引擎
- * 参考 GitHub 开源项目 HandwritingGenerator 的核心思路：
+ * 手写渲染引擎（增强版）
+ * 
+ * 参考 GitHub 开源项目 HandwritingGenerator + beautifulcarrot 的核心思路：
  * 1. 逐字符布局
- * 2. 对每个字符施加随机扰动（位置、旋转、缩放、不透明度）
+ * 2. 对每个字符施加随机扰动（位置、旋转、缩放、不透明度、笔迹粗细）
  * 3. 模拟墨水浓淡变化
- *
- * 在此基础上增强：
- * - 支持用户微调覆盖
- * - 支持横格线基线对齐
- * - 编辑态/最终态分离渲染
+ * 4. 支持背景图渲染
+ * 5. 支持多区域/多页文本流
+ * 6. 支持横格线基线对齐
+ * 7. 编辑态/最终态分离渲染
  */
 
 /** 简易种子随机数（保证同一文本多次渲染结果一致） */
@@ -34,110 +36,7 @@ class SeededRandom {
 }
 
 /**
- * 对文本进行逐字符布局
- * @param text 文本内容
- * @param ctx canvas 上下文（用于测量字符宽度）
- * @param params 手写参数
- * @param canvasWidth 画布宽度
- * @param startY 起始 y 坐标
- * @param gridLines 横格线（用于基线对齐）
- * @returns 字符布局数组
- */
-export function layoutText(
-  text: string,
-  ctx: CanvasRenderingContext2D,
-  params: HandwritingParams,
-  canvasWidth: number,
-  startY: number,
-  gridLines: number[] = [],
-): CharLayout[] {
-  const layouts: CharLayout[] = []
-  const {
-    fontSize,
-    lineHeight,
-    letterSpacing,
-    printFont,
-  } = params
-
-  // 设置字体用于测量
-  ctx.font = `${fontSize}px "${printFont}", sans-serif`
-
-  const leftMargin = 40
-  const rightMargin = 40
-  const usableWidth = canvasWidth - leftMargin - rightMargin
-
-  let currentX = leftMargin
-  let currentLine = 0
-  // 基线 y 坐标：如果有横格线则对齐到横格线，否则按行高计算
-  let currentBaselineY = startY + fontSize
-
-  // 如果有横格线，将第一行基线对齐到第一条横格线
-  if (gridLines.length > 0) {
-    currentBaselineY = gridLines[0]
-  }
-
-  const chars = Array.from(text)
-
-  for (let i = 0; i < chars.length; i++) {
-    const char = chars[i]
-
-    // 处理换行符
-    if (char === '\n') {
-      layouts.push({
-        char: '\n',
-        x: currentX,
-        y: currentBaselineY,
-        width: 0,
-        height: fontSize,
-        lineIndex: currentLine,
-        isLineBreak: true,
-      })
-      currentLine++
-      currentX = leftMargin
-      // 下一行基线
-      if (gridLines.length > currentLine) {
-        currentBaselineY = gridLines[currentLine]
-      } else {
-        currentBaselineY += fontSize * lineHeight
-      }
-      continue
-    }
-
-    // 测量字符宽度
-    const metrics = ctx.measureText(char)
-    const charWidth = metrics.width + letterSpacing
-
-    // 检查是否需要换行
-    if (currentX + charWidth > leftMargin + usableWidth) {
-      currentLine++
-      currentX = leftMargin
-      if (gridLines.length > currentLine) {
-        currentBaselineY = gridLines[currentLine]
-      } else {
-        currentBaselineY += fontSize * lineHeight
-      }
-    }
-
-    layouts.push({
-      char,
-      x: currentX,
-      y: currentBaselineY,
-      width: metrics.width,
-      height: fontSize,
-      lineIndex: currentLine,
-    })
-
-    currentX += charWidth
-  }
-
-  return layouts
-}
-
-/**
  * 为每个字符生成手写样式（随机扰动）
- * @param layouts 字符布局
- * @param params 手写参数
- * @param seed 随机种子
  */
 export function generateHandwritingStyles(
   layouts: CharLayout[],
@@ -153,6 +52,8 @@ export function generateHandwritingStyles(
     colorJitter,
     inkIntensity,
     color,
+    strokeWidth,
+    strokeWidthJitter,
   } = params
 
   return layouts.map((layout) => {
@@ -164,6 +65,7 @@ export function generateHandwritingStyles(
         scale: 1,
         opacity: 0,
         color,
+        strokeWidth,
       }
     }
 
@@ -174,13 +76,12 @@ export function generateHandwritingStyles(
       scale: 1 + (rng.next() - 0.5) * 2 * scaleJitter,
       opacity: Math.max(0.3, Math.min(1, inkIntensity + (rng.next() - 0.5) * 2 * opacityJitter)),
       color: jitterColor(color, colorJitter, rng),
+      strokeWidth: Math.max(0.5, strokeWidth + (rng.next() - 0.5) * 2 * strokeWidthJitter),
     }
   })
 }
 
-/**
- * 对颜色进行随机抖动
- */
+/** 对颜色进行随机抖动 */
 function jitterColor(hex: string, jitter: number, rng: SeededRandom): string {
   if (jitter <= 0) return hex
   const rgb = hexToRgb(hex)
@@ -208,14 +109,54 @@ function rgbToHex(r: number, g: number, b: number): string {
 }
 
 /**
+ * 渲染背景图（如果有）
+ */
+export function renderBackground(
+  ctx: CanvasRenderingContext2D,
+  background: { dataUrl: string; width: number; height: number } | null,
+  canvasWidth: number,
+  canvasHeight: number,
+  paperColor: string,
+): void {
+  // 先填充纸张色
+  ctx.fillStyle = paperColor
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight)
+
+  if (background && background.dataUrl) {
+    const img = new Image()
+    img.src = background.dataUrl
+    // 同步绘制（图片已缓存）
+    if (img.complete) {
+      ctx.drawImage(img, 0, 0, canvasWidth, canvasHeight)
+    } else {
+      // 异步加载后会触发重绘
+      img.onload = () => {
+        ctx.drawImage(img, 0, 0, canvasWidth, canvasHeight)
+      }
+    }
+  }
+}
+
+/**
+ * 同步渲染背景图（使用预加载的 Image 对象）
+ */
+export function renderBackgroundSync(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement | null,
+  canvasWidth: number,
+  canvasHeight: number,
+  paperColor: string,
+): void {
+  ctx.fillStyle = paperColor
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight)
+
+  if (img && img.complete && img.naturalWidth > 0) {
+    ctx.drawImage(img, 0, 0, canvasWidth, canvasHeight)
+  }
+}
+
+/**
  * 在编辑态渲染打印体文字（标准字体，无扰动）
- * @param ctx canvas 上下文
- * @param layouts 字符布局
- * @param params 手写参数
- * @param adjustments 用户微调
- * @param selectedIndices 当前选中的字符索引
- * @param showBoundingBoxes 是否显示字符边界框
- * @param showGrid 是否显示网格辅助线
  */
 export function renderEditMode(
   ctx: CanvasRenderingContext2D,
@@ -225,21 +166,42 @@ export function renderEditMode(
   selectedIndices: Set<number>,
   showBoundingBoxes: boolean,
   showGrid: boolean,
+  backgroundImg: HTMLImageElement | null = null,
+  regions: WritableRegion[] = [],
 ) {
-  const { fontSize, printFont, color, gridColor, paperColor } = params
+  const { fontSize, printFont, color, gridColor, paperColor, strokeWidth } = params
 
-  // 清空画布并填充纸张背景
-  ctx.fillStyle = paperColor
-  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+  // 渲染背景
+  renderBackgroundSync(ctx, backgroundImg, ctx.canvas.width, ctx.canvas.height, paperColor)
 
-  // 绘制横格线（编辑态辅助线）
-  if (showGrid) {
-    drawGridLines(ctx, layouts, params)
+  // 绘制可写区域边界（编辑态辅助）
+  if (regions.length > 0 && showGrid) {
+    regions.forEach((region) => {
+      ctx.save()
+      ctx.strokeStyle = 'rgba(124, 152, 133, 0.3)'
+      ctx.lineWidth = 1
+      ctx.setLineDash([6, 4])
+      ctx.strokeRect(region.x, region.y, region.width, region.height)
+      ctx.setLineDash([])
+
+      // 绘制区域内的横格线
+      region.gridLines.forEach((lineY) => {
+        ctx.globalAlpha = 0.4
+        ctx.strokeStyle = gridColor
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.moveTo(region.x, region.y + lineY)
+        ctx.lineTo(region.x + region.width, region.y + lineY)
+        ctx.stroke()
+      })
+      ctx.restore()
+    })
   }
 
   // 设置打印字体
   ctx.font = `${fontSize}px "${printFont}", sans-serif`
   ctx.textBaseline = 'alphabetic'
+  ctx.lineWidth = strokeWidth
 
   // 渲染每个字符
   layouts.forEach((layout, index) => {
@@ -294,11 +256,6 @@ export function renderEditMode(
 
 /**
  * 在最终态渲染手写体文字（带随机扰动效果）
- * @param ctx canvas 上下文
- * @param layouts 字符布局
- * @param styles 手写样式
- * @param params 手写参数
- * @param adjustments 用户微调
  */
 export function renderPreviewMode(
   ctx: CanvasRenderingContext2D,
@@ -306,21 +263,36 @@ export function renderPreviewMode(
   styles: CharHandwritingStyle[],
   params: HandwritingParams,
   adjustments: Map<number, { offsetX: number; offsetY: number; scale: number; rotation: number; color?: string }>,
+  backgroundImg: HTMLImageElement | null = null,
+  regions: WritableRegion[] = [],
 ) {
-  const { fontSize, font, paperColor, showGrid, gridColor } = params
+  const { fontSize, font, paperColor, showGrid, gridColor, strokeWidth, strokeWidthJitter } = params
 
-  // 清空画布并填充纸张背景
-  ctx.fillStyle = paperColor
-  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+  // 渲染背景
+  renderBackgroundSync(ctx, backgroundImg, ctx.canvas.width, ctx.canvas.height, paperColor)
 
-  // 最终态也绘制横格线（更淡）
-  if (showGrid) {
-    drawGridLines(ctx, layouts, params, 0.35)
+  // 最终态绘制横格线（更淡）
+  if (showGrid && regions.length > 0) {
+    regions.forEach((region) => {
+      ctx.save()
+      region.gridLines.forEach((lineY) => {
+        ctx.globalAlpha = 0.25
+        ctx.strokeStyle = gridColor
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.moveTo(region.x, region.y + lineY)
+        ctx.lineTo(region.x + region.width, region.y + lineY)
+        ctx.stroke()
+      })
+      ctx.restore()
+    })
   }
 
   // 设置手写字体
   ctx.font = `${fontSize}px "${font}", cursive`
   ctx.textBaseline = 'alphabetic'
+
+  const rng = new SeededRandom(params.inkIntensity * 1000)
 
   // 渲染每个字符（带手写效果）
   layouts.forEach((layout, index) => {
@@ -336,6 +308,7 @@ export function renderPreviewMode(
     const rotation = ((adj?.rotation || 0) * Math.PI) / 180 + style.rotation
     const color = adj?.color || style.color
     const opacity = style.opacity
+    const currentStrokeWidth = strokeWidth + (rng.next() - 0.5) * 2 * strokeWidthJitter
 
     ctx.save()
     ctx.globalAlpha = opacity
@@ -346,6 +319,7 @@ export function renderPreviewMode(
     // 模拟墨水效果：轻微的阴影模拟笔触渗透
     ctx.shadowColor = color
     ctx.shadowBlur = 0.5
+    ctx.lineWidth = Math.max(0.5, currentStrokeWidth)
 
     ctx.fillStyle = color
     ctx.fillText(layout.char, -layout.width / 2, 0)
@@ -353,67 +327,10 @@ export function renderPreviewMode(
     ctx.restore()
   })
 
-  // 重置阴影
+  // 重置
   ctx.shadowColor = 'transparent'
   ctx.shadowBlur = 0
   ctx.globalAlpha = 1
-}
-
-/**
- * 绘制横格线
- */
-function drawGridLines(
-  ctx: CanvasRenderingContext2D,
-  layouts: CharLayout[],
-  params: HandwritingParams,
-  alpha: number = 0.6,
-) {
-  const { gridColor, fontSize, lineHeight, gridSpacing } = params
-  const leftMargin = 40
-  const rightMargin = 40
-  const width = ctx.canvas.width - leftMargin - rightMargin
-
-  // 收集所有行的基线 y 坐标
-  const baselines = new Set<number>()
-  layouts.forEach((layout) => {
-    if (!layout.isLineBreak) {
-      baselines.add(layout.y)
-    }
-  })
-
-  // 如果没有布局信息，按固定间距绘制
-  if (baselines.size === 0) {
-    const spacing = gridSpacing || fontSize * lineHeight
-    for (let y = fontSize + 40; y < ctx.canvas.height - 40; y += spacing) {
-      drawSingleGridLine(ctx, leftMargin, y, width, gridColor, alpha)
-    }
-    return
-  }
-
-  // 按基线绘制横格线
-  Array.from(baselines).sort((a, b) => a - b).forEach((y) => {
-    drawSingleGridLine(ctx, leftMargin, y, width, gridColor, alpha)
-  })
-}
-
-function drawSingleGridLine(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  width: number,
-  color: string,
-  alpha: number,
-) {
-  ctx.save()
-  ctx.globalAlpha = alpha
-  ctx.strokeStyle = color
-  ctx.lineWidth = 1
-  ctx.setLineDash([])
-  ctx.beginPath()
-  ctx.moveTo(x, y)
-  ctx.lineTo(x + width, y)
-  ctx.stroke()
-  ctx.restore()
 }
 
 /**
@@ -425,5 +342,45 @@ export function getCharBoundingBox(layout: CharLayout, padding: number = 3): Sel
     y: layout.y - layout.height - padding,
     width: layout.width + padding * 2,
     height: layout.height * 1.3 + padding * 2,
+  }
+}
+
+/**
+ * 渲染单页到指定 canvas（用于多页导出）
+ */
+export function renderPage(
+  ctx: CanvasRenderingContext2D,
+  page: PageLayout,
+  styles: CharHandwritingStyle[],
+  params: HandwritingParams,
+  adjustments: Map<number, { offsetX: number; offsetY: number; scale: number; rotation: number; color?: string }>,
+  mode: 'edit' | 'preview',
+  backgroundImg: HTMLImageElement | null = null,
+  globalStartIndex: number = 0,
+): void {
+  if (mode === 'edit') {
+    renderEditMode(
+      ctx,
+      page.chars,
+      params,
+      adjustments,
+      new Set(),
+      false,
+      params.showGrid,
+      backgroundImg,
+      [page.region],
+    )
+  } else {
+    // 为本页字符提取对应样式
+    const pageStyles = page.chars.map((_, i) => styles[globalStartIndex + i] || styles[0])
+    renderPreviewMode(
+      ctx,
+      page.chars,
+      pageStyles,
+      params,
+      adjustments,
+      backgroundImg,
+      [page.region],
+    )
   }
 }
